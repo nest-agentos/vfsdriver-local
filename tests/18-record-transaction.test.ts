@@ -101,6 +101,7 @@ class FakeSidecarDb implements ISidecarDb {
     async clearRecordFields(path: string): Promise<void> {
         for (const key of this.records.keys()) if (key.startsWith(`${path}\0`)) this.records.delete(key);
     }
+    async readTransaction<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T> { return operation(this); }
     async begin(): Promise<void> { this.snapshot = new Map(this.records); }
     async commit(): Promise<void> { this.snapshot = undefined; }
     async rollback(): Promise<void> {

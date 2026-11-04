@@ -42,11 +42,13 @@ export interface ISidecarDb {
     deleteRecordField(path: string, field: string): Promise<void>;
     listRecordFields(path: string, prefix?: string): Promise<Array<{ field: string; value: unknown }>>;
     /** SQL-bounded page with the exact prefix total, on the current connection. */
-    listRecordFieldsPage?(path: string, prefix: string, offset: number, limit: number): Promise<import('./record-page').SidecarRecordPage>;
+    listRecordFieldsPage?(path: string, prefix: string, offset: number, limit: number, after?: string): Promise<import('./record-page').SidecarRecordPage>;
     clearRecordFields(path: string): Promise<void>;
 
     /** Supply a connection-bound handle for every operation in the transaction. */
     transaction?<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T>;
+    /** A deferred, read-only snapshot; never reserves the SQLite writer. */
+    readTransaction<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T>;
 
     begin(): Promise<void>;
     commit(): Promise<void>;

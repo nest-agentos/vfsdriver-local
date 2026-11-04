@@ -11,6 +11,7 @@ const JOURNAL = '/__vfs_namespace_journal__';
 class RecordingSidecar implements ISidecarDb {
     journalProbes = 0;
     transactions = 0;
+    readTransactions = 0;
     metaExtCalls = 0;
     metaExtBatches = 0;
     private records = new Map<string, unknown>();
@@ -28,6 +29,7 @@ class RecordingSidecar implements ISidecarDb {
         return this.records.get(`${path}\0${field}`);
     }
     async getRecordFields(path: string, fields: string[]): Promise<Record<string, unknown>> {
+        if (path === JOURNAL && fields.includes('intent')) this.journalProbes++;
         return Object.fromEntries(fields.flatMap(field => {
             const value = this.records.get(`${path}\0${field}`);
             return value === undefined ? [] : [[field, value]];
@@ -54,6 +56,7 @@ class RecordingSidecar implements ISidecarDb {
     async assertPathDataVacant(path: string): Promise<void> {
         if ([...this.records.keys()].some(key => key.split('\0')[0].startsWith(path))) throw new Error('Destination path data exists');
     }
+    async readTransaction<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T> { this.readTransactions++; return operation(this); }
     async begin(): Promise<void> {}
     async commit(): Promise<void> {}
     async rollback(): Promise<void> {}
@@ -119,18 +122,19 @@ describe('rename journal probing', () => {
             backend.resetSidecarStats();
             expect(await fs.meta.seq!.getEntries('/keys.seq', ['a', 'b', 'a', 'missing'])).toEqual({ a: '1', b: '2' });
             // One node lookup plus one record snapshot, regardless of the key count.
-            expect(backend.sidecarStats.transaction).toBe(2);
-            expect(backend.sidecarStats.getRecordFields).toBe(1);
-            expect(backend.sidecarStats.getRecordField).toBe(2);
+            expect(backend.sidecarStats.transaction).toBe(0);
+            expect(backend.sidecarStats.readTransaction).toBe(2);
+            expect(backend.sidecarStats.getRecordFields).toBe(5);
+            expect(backend.sidecarStats.getRecordField).toBe(0);
             expect(backend.sidecarStats.setRecordField).toBe(0);
         } finally { await manager.dispose(); }
     });
 
-    it('checks the journal once per outer transaction, including reads', async () => {
+    it('checks the namespace around reads and recovers inside write transactions', async () => {
         expect(sidecar.journalProbes).toBe(1);
         for (let index = 0; index < 5; index += 1) await backend.records.setRecordField(`/f${index}`, 'state', index);
         for (let index = 0; index < 5; index += 1) await backend.records.getRecordField(`/f${index}`, 'state');
-        expect(sidecar.journalProbes).toBe(11);
+        expect(sidecar.journalProbes).toBe(16);
     });
 
     it('re-reads the journal after writing an intent and still migrates records on rename', async () => {
@@ -143,19 +147,20 @@ describe('rename journal probing', () => {
         expect(await backend.records.getRecordField('/old/data.bin', 'state')).toBeUndefined();
         const settled = sidecar.journalProbes;
         await backend.records.getRecordField('/new/data.bin', 'state');
-        expect(sidecar.journalProbes).toBe(settled + 1);
+        expect(sidecar.journalProbes).toBe(settled + 2);
     });
 
-    it('keeps read recovery and the read in one transaction', async () => {
+    it('uses read snapshots and reserves write transactions for mutations', async () => {
         const afterInit = sidecar.transactions;
         await backend.stat('/missing');
         await backend.stat('/another');
         await backend.records.getRecordField('/x', 'state');
         await backend.records.walkRecordFields('/x', () => true);
         await backend.getAllTags();
-        expect(sidecar.transactions).toBe(afterInit + 5);
+        expect(sidecar.transactions).toBe(afterInit);
+        expect(sidecar.readTransactions).toBe(5);
         await backend.records.setRecordField('/x', 'state', 1);
-        expect(sidecar.transactions).toBe(afterInit + 6);
+        expect(sidecar.transactions).toBe(afterInit + 1);
     });
 
     it('checks path prefixes without fetching sidecar metadata', async () => {
@@ -224,8 +229,8 @@ describe('rename journal probing', () => {
         expect(batches).toEqual([64, 64, 2]);
         expect(sidecar.metaExtBatches).toBe(3);
         expect(sidecar.metaExtCalls).toBe(0);
-        expect(sidecar.transactions).toBe(transactions + 1);
-        expect(sidecar.journalProbes).toBe(probes + 1);
+        expect(sidecar.transactions).toBe(transactions);
+        expect(sidecar.journalProbes).toBe(probes + 2);
     });
 
     it('rejects reading outside a mounted root through a filesystem symlink', async () => {

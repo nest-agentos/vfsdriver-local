@@ -31,7 +31,7 @@ async function fixture() {
 }
 
 /** `transaction` is used by the IPC sidecar, `begin`/`commit` by the in-process one. */
-const transactions = (stats: Record<string, number>) => (stats.transaction ?? 0) + (stats.begin ?? 0);
+const transactions = (stats: Record<string, number>) => (stats.transaction ?? 0) + (stats.begin ?? 0) + (stats.readTransaction ?? 0);
 
 it('reads every field of a large node in one statement and one recovered transaction', async () => {
     const backend = await fixture();
@@ -43,7 +43,9 @@ it('reads every field of a large node in one statement and one recovered transac
     const stats = { ...backend.sidecarStats } as unknown as Record<string, number>;
     expect(stats.listRecordFields).toBe(1);
     expect(stats.listRecordFieldsPage).toBe(0);
-    expect(stats.getRecordField).toBe(1);          // the rename-journal probe
+    expect(stats.getRecordField).toBe(0);
+    expect(stats.getRecordFields).toBe(2); // Atomic epoch probes before and after the snapshot.
+    expect(stats.begin).toBe(0);
     expect(stats.setRecordField).toBe(0);
     expect(transactions(stats)).toBe(1);
 });
@@ -56,10 +58,11 @@ it('scans many nodes with one statement and one transaction each', async () => {
     }
     const stats = { ...backend.sidecarStats } as unknown as Record<string, number>;
     expect(stats.listRecordFields).toBe(NODES);
-    expect(stats.getRecordField).toBe(NODES);
+    expect(stats.getRecordField).toBe(0);
+    expect(stats.begin).toBe(0);
     expect(transactions(stats)).toBe(NODES);
     // No per-field operations: reads and callbacks stay inside the single statement.
-    expect(stats.getRecordFields).toBe(0);
+    expect(stats.getRecordFields).toBe(NODES * 2);
     expect(stats.getRecordFieldsMany).toBe(0);
     expect(stats.setRecordField).toBe(0);
 });

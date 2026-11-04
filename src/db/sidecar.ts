@@ -174,14 +174,20 @@ export class BetterSqliteSidecarDb implements ISidecarDb {
         return Promise.resolve(rows.map(row => ({ field: row.field, value: JSON.parse(row.value) })));
     }
 
-    async listRecordFieldsPage(path: string, prefix: string, offset: number, limit: number) {
-        const rows = this.prepare(RECORD_PAGE_SQL).all(...recordPageValues(path, prefix, offset, limit)) as RecordPageRow[];
+    async listRecordFieldsPage(path: string, prefix: string, offset: number, limit: number, after?: string) {
+        const rows = this.prepare(RECORD_PAGE_SQL).all(...recordPageValues(path, prefix, offset, limit, after)) as RecordPageRow[];
         return decodeRecordPage(rows);
     }
 
     clearRecordFields(path: string): Promise<void> {
         this.prepare('DELETE FROM records WHERE path = ?').run(path);
         return Promise.resolve();
+    }
+
+    async readTransaction<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T> {
+        this.db.exec('BEGIN');
+        try { const result = await operation(this); this.db.exec('COMMIT'); return result; }
+        catch (error) { this.db.exec('ROLLBACK'); throw error; }
     }
 
     async begin(): Promise<void> {

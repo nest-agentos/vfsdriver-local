@@ -52,3 +52,19 @@ it.each(['better'] as const)('bounds SQLite page payloads and retains totals and
         expect(await db.getRecordField('/__vfs_namespace_journal__', 'intent')).toBeDefined();
     }
 });
+
+it('seeks after a field without loading skipped record values', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'record-seek-'));
+    cleanup.push(() => rm(root, {recursive: true, force: true}));
+    const backend = new LocalFSBackend({rootDir: root, sidecarDir: join(root, '.meta')});
+    await backend.init(); cleanup.push(() => backend.close());
+    await backend.records.transaction!(async tx => {
+        for (let i = 0; i < 100; i++) await tx.setRecordField('/rows', `k/${String(i).padStart(3, '0')}`, i);
+    });
+    backend.resetSidecarStats(); const seen: string[] = [];
+    expect(await backend.records.walkRecordFields('/rows', field => {seen.push(field); return true;},
+        {prefix: 'k/', after: 'k/095', limit: 3, order: 'key'})).toEqual({total: 4, processed: 3});
+    expect(seen).toEqual(['k/096', 'k/097', 'k/098']);
+    expect(backend.sidecarStats.listRecordFieldsPage).toBe(1);
+    expect(backend.sidecarStats.listRecordFields).toBe(0);
+});

@@ -14,7 +14,7 @@ export const SIDECAR_OPERATIONS = [
     'movePathData', 'assertPathDataVacant',
     'syncTags', 'getAllDistinctTags', 'queryByTag', 'listTagEntries',
     'getRecordField', 'getRecordFields', 'getRecordFieldsMany', 'setRecordField', 'deleteRecordField', 'listRecordFields', 'listRecordFieldsPage', 'clearRecordFields',
-    'transaction', 'begin', 'commit', 'rollback', 'healthCheck', 'close',
+    'transaction', 'readTransaction', 'begin', 'commit', 'rollback', 'healthCheck', 'close',
 ] as const;
 
 export type SidecarOperation = typeof SIDECAR_OPERATIONS[number];
@@ -35,7 +35,7 @@ export function countSidecarOperations(db: ISidecarDb, bump: (operation: string)
                 const value = Reflect.get(object, property, object);
                 if (typeof value !== 'function') return value;
                 const name = String(property);
-                if (name === 'transaction') {
+                if (name === 'transaction' || name === 'readTransaction') {
                     return (operation: (inner: ISidecarDb) => Promise<unknown>) => {
                         bump(name);
                         return (value as (callback: (inner: ISidecarDb) => Promise<unknown>) => Promise<unknown>)

@@ -48,7 +48,8 @@ describe('LocalFS sidecar call stats', () => {
         expect(stats.getRecordField).toBeGreaterThanOrEqual(1);
         // Both operations check cross-process rename recovery inside their transaction.
         expect(afterWrite.transaction).toBe(1);
-        expect(stats.transaction).toBe(2);
+        expect(stats.transaction).toBe(1);
+        expect(stats.readTransaction).toBe(1);
     });
 
     it('counts statements executed inside a transaction callback', async () => {
@@ -83,6 +84,7 @@ class FakeSidecarDb implements ISidecarDb {
     async clearRecordFields(path: string): Promise<void> {
         for (const key of this.records.keys()) if (key.startsWith(`${path}\0`)) this.records.delete(key);
     }
+    async readTransaction<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T> { return operation(this); }
     async begin(): Promise<void> {}
     async commit(): Promise<void> {}
     async rollback(): Promise<void> {}

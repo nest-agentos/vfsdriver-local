@@ -23,7 +23,6 @@ src/
 │   ├── sidecar-interface.ts ISidecarDb 接口 + MetaExtRow
 │   ├── sidecar.ts           BetterSqliteSidecarDb (better-sqlite3 实现)
 │   ├── sidecar-stats.ts     SIDECAR_OPERATIONS + countSidecarOperations（IPC 计量代理）
-│   ├── sidecar-sync.ts      ISidecarDbSync 接口(同步事务控制)
 │   └── path-data.ts         子树搬迁 SQL (Node / Tauri sidecar 共用)
 ├── fs/
 │   ├── fs-ops.ts            IFsOps 接口 (readFile/writeFile/stat/readDir/...)
@@ -63,9 +62,9 @@ backend.resetSidecarStats();
 - `write` 使用临时文件 + rename 保证原子性;临时名必须**每次写唯一**（Node 使用 UUID 并以 wx 独占创建；Rust 使用序号候选并以 create_new 独占创建）——否则同一路径的并发写会共用临时文件、第二个 rename 报 `ENOENT`(桌面 Rust `fs_write_file` 同样要唯一,且不能改真实扩展名)。回归:`25-journal-probe.test.ts`「survives concurrent writes to the same path」。
 - 元数据(metadata, tags, icon)写入 SQLite sidecar,不与文件内容耦合。
 - `init()` 仅在完整性检查明确报告损坏，或原生 SQLite 返回 SQLITE_CORRUPT/SQLITE_NOTADB 时重建；探针不可用、未知/空结果和普通关闭错误不能授权删除数据库，须保留原文件并抛出原初始化错误。
-- **rename journal 每个外层事务核对**：另一进程可在当前连接打开后提交 intent 并崩溃；实例内「曾经干净」不能证明 journal 仍为空。恢复与记录/元数据读写必须在同一事务内执行。`libraries/durable-kernel/tests/ipc.test.ts` 覆盖先打开读者、写者在文件 rename 后 SIGKILL、原读者恢复 sidecar 的 root/module 两条路径。
-- **只读恢复边界**：`withDbRead` 复用事务路径，在执行读取前核对并恢复 rename journal。事务内已绑定的 scoped 记录句柄直接使用同一连接。后续减少 IPC 应通过原子批量操作，不能省略跨进程恢复检查。
-- **sidecar 批量读取**：完整目录列表按 64 项调用 `getMetaExtMany`；SeqFile 已知字段集合调用 `getRecordFields`；跨多个 SeqFile 的同类扫描调用 `getRecordFieldsMany`（`SidecarRecordStore` 按 200 条/批，一条 `(path, field) IN (…)`，批内共用一次 `withDbRead`/外层事务与一次 rename journal 核对）。三者均留在同一个 `withDbRead`/外层事务中，因此每批只核对一次 rename journal；路径映射层不得丢失批量能力。禁止改成进程级读缓存。`TauriSqlSidecarDb` 与 Node/CLI 实现同一 SQL 形态（`sidecar_select` 接受变长参数），桌面本轮未做运行时验收。**遍历成本回归**：`tests/29-record-walk-cost.test.ts` 断言 500 字段节点 = 1 条语句 + 1 个 recovery 事务、40 个节点 = 40 条语句/事务（不是每行或每字段一次操作）；这是浏览器 IndexedDB 旧实现（每行一次请求）在桌面侧的对应守卫。
+- **重命名恢复与只读快照**：写事务仍在操作前核对并恢复 rename journal。普通读通过必需的 `ISidecarDb.readTransaction` 使用 `BEGIN` 快照，不预留 SQLite 写锁；快照内读取 `intent` 与 `next-rename`，提交后重新核对。出现 intent 时进入写事务恢复；版本变化（包括读取失败期间发生的重命名）重新读取，最多四次，持续变化报 `EBUSY/NAMESPACE_CHANGED`。不得以进程内“曾经干净”跳过跨进程核对。
+- **连接归属**：同一 SQLite 连接的读写事务继续通过同一个队列排他使用，防止读取混入未提交写入；跨连接 WAL 读快照可与写事务并行。记录事务内的 scoped 句柄复用已有事务，不嵌套 BEGIN。所有内置宿主实现同一只读契约，不保留读转写事务的回退。
+- **sidecar 批量读取**：完整目录每批 64 项调用 `getMetaExtMany`；已知字段集合调用 `getRecordFields`；跨文件批量调用 `getRecordFieldsMany`（最多 200 条/批）。普通读在一次只读快照内完成，前后各一次原子 namespace 核对；写事务中复用原事务。宿主及路径映射必须转发这些端口，不以跨进程读缓存替代。成本回归见 `29-record-walk-cost.test.ts`，并发写锁、重命名及恢复见 `30-read-snapshot.test.ts`。
 - **`statType` 供能力检查用**:VFS 的 `noLinks` 会对每个路径前缀做类型检查,`LocalFSBackend.statType` 复用同一个 `fsOps.stat` 但**不读 sidecar 元数据**——否则每个前缀都是一次 `getMetaExt` IPC。实测单次发送的 VFS stat 由 653 降到 114。语义与 `stat` 的类型同源,不要在其中加元数据。`25-journal-probe.test.ts` 守「深路径只对目标取一次元数据」。详见 [验收记录 §14](https://github.com/mushuanli/itookit/blob/v5.3/doc/minimal-system-acceptance.md)。
 - **`statType` 微批处理**:`noLinks` 并发发起各前缀检查,`LocalFSBackend` 把同一事件循环 tick 的 `statType` 合并为一次 `IFsOps.statMany`(桌面 = 一次 `fs_stat_many` IPC)。**不要改成逐个 await 或逐个 `fsOps.stat`**,那会把一次发送的前缀走查从批量打回 ~900 次 IPC。回归:`25-journal-probe.test.ts`「coalesces a path-prefix walk into one batched stat call」。详见 [验收记录 §16](https://github.com/mushuanli/itookit/blob/v5.3/doc/minimal-system-acceptance.md)。
 - 此包仅用于 Node/Electron 环境,依赖 `better-sqlite3` (原生模块)。
@@ -87,3 +86,5 @@ pnpm --filter @nestos/vfsdriver-local test   # vitest run
 ## 通用宿主事务端口
 
 `storageAccess()` 提供 rootDir、sidecarDir、身份、实际 durability 和连接绑定 transaction，复用现有 rename 恢复与串行边界。它不包含同步策略，不反向依赖 vfs-sync。Node 默认仍是 WAL/NORMAL；显式 `durability: 'full'` 使用 WAL/FULL，BEGIN IMMEDIATE 的 SQLITE_BUSY 通过有界异步重试，避免另一个连接同步等待时阻塞当前连接的文件 I/O 和提交。注入式 sidecar 可报告 durability，未报告时为 unknown。
+
+已移除无人使用的 `ISidecarDbSync` / beginSync 旧契约；宿主统一实现 `ISidecarDb` 的只读快照与写事务。

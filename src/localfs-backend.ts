@@ -21,7 +21,7 @@ import type {
     RecordQueryResult,
     RecordWalkOptions,
 } from '@nestos/vfs-core';
-import { FSError } from '@nestos/vfs-core';
+import { FSError, generateId } from '@nestos/vfs-core';
 import type { ISidecarDb, MetaExtRow } from './db/sidecar-interface';
 import { SIDECAR_OPERATIONS, countSidecarOperations, type SidecarOperation } from './db/sidecar-stats';
 import type { IFsOps, StatResult } from './fs/fs-ops';
@@ -630,12 +630,12 @@ class SidecarRecordStore implements IRecordStore {
         if (bounded && this.db().listRecordFieldsPage && Number.isSafeInteger(offset) && offset >= 0 && Number.isSafeInteger(limit) && limit >= 0) {
             const read = async (db: ISidecarDb) => {
                 if (!db.listRecordFieldsPage) return undefined;
-                return db.listRecordFieldsPage(path, options?.prefix ?? '', offset, limit);
+                return db.listRecordFieldsPage(path, options?.prefix ?? '', offset, limit, options?.after);
             };
             const page = this.scoped ? await read(this.db()) : await this.withDbRead(read);
             if (page) return { total: page.total, processed: await visitRecordRows(page.rows, callback) };
         }
-        const rows = await this.rows(path, options?.prefix);
+        const rows = (await this.rows(path, options?.prefix)).filter(row => options?.after === undefined || row.field > options.after);
         return { total: rows.length, processed: await visitRecordRows(rows.slice(offset), callback, limit) };
     }
     async walkRecordFieldNames(
@@ -651,6 +651,10 @@ class SidecarRecordStore implements IRecordStore {
         }, options);
         return processed;
     }
+    readTransaction<T>(operation: (tx: IRecordTransaction) => Promise<T>): Promise<T> {
+        if (this.scoped) return operation(this);
+        return this.withDbRead(db => operation(new SidecarRecordStore(() => db, undefined, true)));
+    }
     transaction<T>(operation: (tx: IRecordTransaction) => Promise<T>): Promise<T> {
         return this.runTransaction(operation);
     }
@@ -661,13 +665,36 @@ class SidecarRecordStore implements IRecordStore {
     withDb<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T> {
         return this.serialize(db => this.runInTransaction(db, operation));
     }
-    /**
-     * Reads share the transaction/recovery boundary with writes: another process may
-     * have moved files without migrating the durable records yet.
-     */
+    /** Keep connection ownership, but reserve a writer only when recovery is needed. */
     withDbRead<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T> {
         if (this.scoped) return operation(this.db());
-        return this.withDb(operation);
+        return this.serialize(db => this.readSnapshot(db, operation));
+    }
+    private async namespaceVersion(db: ISidecarDb): Promise<Record<string, unknown>> {
+        if (db.getRecordFields) return db.getRecordFields(RENAME_JOURNAL, ['intent', 'next-rename']);
+        const intent = await db.getRecordField(RENAME_JOURNAL, 'intent');
+        return {intent, 'next-rename': await db.getRecordField(RENAME_JOURNAL, 'next-rename')};
+    }
+    private async readSnapshot<T>(db: ISidecarDb, operation: (db: ISidecarDb) => Promise<T>): Promise<T> {
+        const started = Date.now(), operationId = generateId();
+        for (let attempt = 0; attempt < 4; attempt++) {
+            const snapshot = await db.readTransaction(async inner => {
+                const before = await this.namespaceVersion(inner);
+                if (before.intent) return {before};
+                try { return {before, result: {value: await operation(inner)}}; }
+                catch (error) { return {before, result: {error}}; }
+            });
+            const after = await this.namespaceVersion(db);
+            if (!snapshot.before.intent && !after.intent && snapshot.before['next-rename'] === after['next-rename']) {
+                if ('error' in snapshot.result!) throw snapshot.result.error;
+                return snapshot.result!.value as T;
+            }
+            // A fresh snapshot catches a rename committed while filesystem I/O was pending.
+            if (after.intent) await this.runInTransaction(db, async () => undefined);
+        }
+        console.warn('[LocalFS:read]', {operation: 'storage.read', stage: 'namespace-fence', result: 'failure',
+            code: 'NAMESPACE_CHANGED', operationId, attempts: 4, durationMs: Date.now() - started});
+        throw new FSError('EBUSY', 'Namespace changed repeatedly during read; retry the operation');
     }
     /** Every operation on this store is serialized through one tail so reads and writes stay ordered. */
     private serialize<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T> {
