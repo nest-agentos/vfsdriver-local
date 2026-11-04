@@ -1,0 +1,282 @@
+/** Read optimizations must preserve cross-process rename recovery and capability checks. */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, mkdir, writeFile, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { LocalFSBackend } from '../src/localfs-backend';
+import type { ISidecarDb, MetaExtRow } from '../src/db/sidecar-interface';
+
+const JOURNAL = '/__vfs_namespace_journal__';
+
+class RecordingSidecar implements ISidecarDb {
+    journalProbes = 0;
+    transactions = 0;
+    metaExtCalls = 0;
+    metaExtBatches = 0;
+    private records = new Map<string, unknown>();
+    async getMetaExt(): Promise<MetaExtRow | null> { this.metaExtCalls += 1; return null; }
+    async getMetaExtMany(): Promise<MetaExtRow[]> { this.metaExtBatches += 1; return []; }
+    async upsertMetaExt(): Promise<void> {}
+    async deleteMetaExt(): Promise<void> {}
+    async syncTags(): Promise<void> {}
+    async getAllDistinctTags(): Promise<string[]> { return []; }
+    async queryByTag(): Promise<string[]> { return []; }
+    async healthCheck(): Promise<{ ok: boolean }> { return { ok: true }; }
+    async close(): Promise<void> {}
+    async getRecordField(path: string, field: string): Promise<unknown | undefined> {
+        if (path === JOURNAL && field === 'intent') this.journalProbes += 1;
+        return this.records.get(`${path}\0${field}`);
+    }
+    async getRecordFields(path: string, fields: string[]): Promise<Record<string, unknown>> {
+        return Object.fromEntries(fields.flatMap(field => {
+            const value = this.records.get(`${path}\0${field}`);
+            return value === undefined ? [] : [[field, value]];
+        }));
+    }
+    async setRecordField(path: string, field: string, value: unknown): Promise<void> { this.records.set(`${path}\0${field}`, value); }
+    async deleteRecordField(path: string, field: string): Promise<void> { this.records.delete(`${path}\0${field}`); }
+    async listRecordFields(path: string, prefix = ''): Promise<Array<{ field: string; value: unknown }>> {
+        const start = `${path}\0`;
+        return [...this.records].filter(([key]) => key.startsWith(start) && key.slice(start.length).startsWith(prefix))
+            .map(([key, value]) => ({ field: key.slice(start.length), value }));
+    }
+    async clearRecordFields(path: string): Promise<void> {
+        for (const key of this.records.keys()) if (key.startsWith(`${path}\0`)) this.records.delete(key);
+    }
+    async movePathData(from: string, to: string): Promise<void> {
+        for (const [key, value] of [...this.records]) {
+            const path = key.split('\0')[0];
+            if (path !== from && !path.startsWith(`${from}/`)) continue;
+            this.records.set(`${to}${path.slice(from.length)}\0${key.split('\0')[1]}`, value);
+            this.records.delete(key);
+        }
+    }
+    async assertPathDataVacant(path: string): Promise<void> {
+        if ([...this.records.keys()].some(key => key.split('\0')[0].startsWith(path))) throw new Error('Destination path data exists');
+    }
+    async begin(): Promise<void> {}
+    async commit(): Promise<void> {}
+    async rollback(): Promise<void> {}
+    async transaction<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T> { this.transactions += 1; return operation(this); }
+}
+
+describe('rename journal probing', () => {
+    let root: string, backend: LocalFSBackend, sidecar: RecordingSidecar;
+    beforeEach(async () => {
+        root = await mkdtemp(join(tmpdir(), 'itookit-journal-'));
+        sidecar = new RecordingSidecar();
+        backend = new LocalFSBackend({ rootDir: join(root, 'files'), sidecarDir: join(root, 'db'),
+            createDb: async () => sidecar });
+        await backend.init();
+    });
+    afterEach(async () => { await backend.close(); await rm(root, { recursive: true, force: true }); });
+
+    it('closes a sidecar when startup journal recovery fails and permits a clean retry', async () => {
+        const db = new RecordingSidecar();
+        const close = vi.spyOn(db, 'close');
+        vi.spyOn(db, 'getRecordField').mockRejectedValueOnce(new Error('database is locked'));
+        const candidate = new LocalFSBackend({ rootDir: join(root, 'retry'), sidecarDir: join(root, 'retry-db'), createDb: async () => db });
+        await expect(candidate.init()).rejects.toThrow('database is locked');
+        expect(close).toHaveBeenCalledTimes(1);
+        await candidate.init();
+        await candidate.close();
+        expect(close).toHaveBeenCalledTimes(2);
+    });
+
+    it('reads bounded ranges including zero length without returning the full file', async () => {
+        await backend.write('/file', new TextEncoder().encode('0123456789'));
+        expect(new TextDecoder().decode(await backend.read('/file', { offset: 3, length: 2 }))).toBe('34');
+        expect(await backend.read('/file', { offset: 3, length: 0 })).toHaveLength(0);
+        expect(new TextDecoder().decode(await backend.read('/file', { length: 3 }))).toBe('012');
+    });
+
+    it('lists lightweight entries and reads physical config without sidecar metadata or record probes', async () => {
+        for (let index = 0; index < 65; index++) await backend.write(`/light/f${index}`, new TextEncoder().encode('data'));
+        await symlink(join(root, 'files/light/f0'), join(root, 'files/light/link'));
+        const { createVFS, createFileSystemView, MemoryBackend } = await import('@itookit/vfs-core');
+        const { manager } = await createVFS({ rootBackend: new MemoryBackend(), additionalMounts: [{ path: '/ws', backend }] });
+        const inner = await manager.openFileSystem('/ws');
+        const view = createFileSystemView({ viewId: 'light', mounts: [{ mountId: 'inner', at: '/', fs: inner, access: 'ro' }] });
+        try {
+            backend.resetSidecarStats();
+            const entries = await view.driver.getChildren('/light', { fields: 'entry' });
+            expect(entries).toHaveLength(65);
+            expect(entries.every(entry => entry.size === 4 && !('metadata' in entry))).toBe(true);
+            expect(await view.driver.readContent('/light/f0', { representation: 'bytes', encoding: 'utf-8' })).toBe('data');
+            expect(backend.sidecarStats.getMetaExt).toBe(0);
+            expect(backend.sidecarStats.getRecordField).toBe(0);
+            expect(backend.sidecarStats.listRecordFields).toBe(0);
+        } finally { await view.dispose(); await manager.dispose(); }
+    });
+
+    it('reads requested SeqFile keys in one recovered record transaction', async () => {
+        const { createVFS } = await import('@itookit/vfs-core');
+        const { manager } = await createVFS({ rootBackend: backend });
+        try {
+            const fs = await manager.openFileSystem('/');
+            await fs.driver.createFile({ name: 'keys.seq', type: 'seqfile' });
+            await fs.meta.seq!.setEntries('/keys.seq', { a: '1', b: '2', unused: '3' });
+            backend.resetSidecarStats();
+            expect(await fs.meta.seq!.getEntries('/keys.seq', ['a', 'b', 'a', 'missing'])).toEqual({ a: '1', b: '2' });
+            // One node lookup plus one record snapshot, regardless of the key count.
+            expect(backend.sidecarStats.transaction).toBe(2);
+            expect(backend.sidecarStats.getRecordFields).toBe(1);
+            expect(backend.sidecarStats.getRecordField).toBe(2);
+            expect(backend.sidecarStats.setRecordField).toBe(0);
+        } finally { await manager.dispose(); }
+    });
+
+    it('checks the journal once per outer transaction, including reads', async () => {
+        expect(sidecar.journalProbes).toBe(1);
+        for (let index = 0; index < 5; index += 1) await backend.records.setRecordField(`/f${index}`, 'state', index);
+        for (let index = 0; index < 5; index += 1) await backend.records.getRecordField(`/f${index}`, 'state');
+        expect(sidecar.journalProbes).toBe(11);
+    });
+
+    it('re-reads the journal after writing an intent and still migrates records on rename', async () => {
+        await backend.write('/old/data.bin', new Uint8Array());
+        await backend.records.setRecordField('/old/data.bin', 'state', 'durable');
+        await backend.rename('/old', '/new');
+        // One probe for the intent, then one clean probe from the receipt transaction.
+        expect(sidecar.journalProbes).toBeGreaterThan(1);
+        expect(await backend.records.getRecordField('/new/data.bin', 'state')).toBe('durable');
+        expect(await backend.records.getRecordField('/old/data.bin', 'state')).toBeUndefined();
+        const settled = sidecar.journalProbes;
+        await backend.records.getRecordField('/new/data.bin', 'state');
+        expect(sidecar.journalProbes).toBe(settled + 1);
+    });
+
+    it('keeps read recovery and the read in one transaction', async () => {
+        const afterInit = sidecar.transactions;
+        await backend.stat('/missing');
+        await backend.stat('/another');
+        await backend.records.getRecordField('/x', 'state');
+        await backend.records.walkRecordFields('/x', () => true);
+        await backend.getAllTags();
+        expect(sidecar.transactions).toBe(afterInit + 5);
+        await backend.records.setRecordField('/x', 'state', 1);
+        expect(sidecar.transactions).toBe(afterInit + 6);
+    });
+
+    it('checks path prefixes without fetching sidecar metadata', async () => {
+        for (const dir of ['/deep', '/deep/a', '/deep/b']) await backend.mkdir(dir);
+        await backend.write('/deep/a/b/file.md', new Uint8Array());
+        const { createVFS, MemoryBackend } = await import('@itookit/vfs-core');
+        const { manager } = await createVFS({ rootBackend: new MemoryBackend(),
+            additionalMounts: [{ path: '/ws', backend }] });
+        try {
+            const fs = await manager.openFileSystem('/ws');
+            sidecar.metaExtCalls = 0;
+            await fs.driver.readContent('/deep/a/b/file.md', { encoding: 'utf-8' });
+            // Four prefix segments are capability-checked via statType; only the target needs meta.
+            expect(sidecar.metaExtCalls).toBeLessThanOrEqual(2);
+        } finally { await manager.dispose(); }
+    });
+
+    it('keeps a nested view prefix walk metadata-free', async () => {
+        for (const dir of ['/nv', '/nv/a', '/nv/b']) await backend.mkdir(dir);
+        await backend.write('/nv/a/b/file.md', new Uint8Array());
+        const { createVFS, createFileSystemView, MemoryBackend } = await import('@itookit/vfs-core');
+        const { manager } = await createVFS({ rootBackend: new MemoryBackend(),
+            additionalMounts: [{ path: '/ws', backend }] });
+        try {
+            const inner = await manager.openFileSystem('/ws');
+            const outer = createFileSystemView({ viewId: 'nested',
+                mounts: [{ mountId: 'inner', at: '/', fs: inner, access: 'ro' }] });
+            sidecar.metaExtCalls = 0;
+            await outer.driver.readContent('/nv/a/b/file.md', { encoding: 'utf-8' });
+            // A view driver exposes getNodeType, so the outer prefix walk stays metadata-free too.
+            expect(sidecar.metaExtCalls).toBeLessThanOrEqual(2);
+            await outer.dispose();
+        } finally { await manager.dispose(); }
+    });
+
+    it('coalesces a path-prefix walk into one batched stat call', async () => {
+        for (const dir of ['/cb', '/cb/a', '/cb/b']) await backend.mkdir(dir);
+        await backend.write('/cb/a/b/file.md', new Uint8Array());
+        const fsOps = (backend as unknown as { fsOps: { statMany: (paths: string[]) => Promise<unknown> } }).fsOps;
+        const batched: string[][] = [];
+        const original = fsOps.statMany.bind(fsOps);
+        fsOps.statMany = async paths => { batched.push(paths); return original(paths); };
+        const { createVFS, MemoryBackend } = await import('@itookit/vfs-core');
+        const { manager } = await createVFS({ rootBackend: new MemoryBackend(),
+            additionalMounts: [{ path: '/ws', backend }] });
+        try {
+            const fs = await manager.openFileSystem('/ws');
+            batched.length = 0;
+            await fs.driver.readContent('/cb/a/b/file.md', { encoding: 'utf-8' });
+            // Concurrent prefix checks arrive as one batched host call (>=2 paths), not one each.
+            expect(Math.max(0, ...batched.map(list => list.length))).toBeGreaterThanOrEqual(2);
+        } finally { await manager.dispose(); }
+    });
+
+    it('lists a wide directory using bounded stat batches', async () => {
+        await mkdir(join(root, 'files', 'wide'));
+        await Promise.all(Array.from({ length: 130 }, (_, index) => writeFile(join(root, 'files', 'wide', `f${index}`), 'mdx')));
+        const port = (backend as unknown as { fsOps: { statMany: (paths: string[]) => Promise<unknown[]> } }).fsOps;
+        const original = port.statMany.bind(port);
+        const batches: number[] = [];
+        port.statMany = async paths => { batches.push(paths.length); return original(paths); };
+        const transactions = sidecar.transactions, probes = sidecar.journalProbes;
+        const nodes = await backend.list('/wide');
+        expect(nodes).toHaveLength(130);
+        expect(nodes.every(node => node.type === 'file' && node.size === 3)).toBe(true);
+        expect(batches).toEqual([64, 64, 2]);
+        expect(sidecar.metaExtBatches).toBe(3);
+        expect(sidecar.metaExtCalls).toBe(0);
+        expect(sidecar.transactions).toBe(transactions + 1);
+        expect(sidecar.journalProbes).toBe(probes + 1);
+    });
+
+    it('rejects reading outside a mounted root through a filesystem symlink', async () => {
+        const outside = join(root, 'outside');
+        await mkdir(outside); await writeFile(join(outside, 'secret.txt'), 'must-not-read');
+        await symlink(outside, join(root, 'files', 'escape'), 'dir');
+        const { createVFS, createFileSystemView, MemoryBackend } = await import('@itookit/vfs-core');
+        const { manager } = await createVFS({ rootBackend: new MemoryBackend(), additionalMounts: [{ path: '/ws', backend }] });
+        try {
+            const inner = await manager.openFileSystem('/ws');
+            const view = createFileSystemView({ viewId: 'link-test', mounts: [{ mountId: 'workspace', at: '/', fs: inner, access: 'ro' }] });
+            try { await expect(view.driver.readContent('/escape/secret.txt', { encoding: 'utf-8' })).rejects.toThrow(); }
+            finally { await view.dispose(); }
+        } finally { await manager.dispose(); }
+    });
+
+    it('does not fail a safe sibling stat when another path is a symlink', async () => {
+        await backend.mkdir('/safe');
+        await symlink(join(root, 'files', 'safe'), join(root, 'files', 'link'), 'dir');
+        const [safe, link] = await Promise.allSettled([backend.statType('/safe'), backend.statType('/link')]);
+        expect(safe).toEqual({ status: 'fulfilled', value: { type: 'directory' } });
+        expect(link).toMatchObject({ status: 'rejected', reason: expect.objectContaining({ code: 'EACCES' }) });
+        expect((await backend.list('/')).map(node => node.name)).toContain('safe');
+        expect((await backend.list('/')).map(node => node.name)).not.toContain('link');
+    });
+
+    it('deduplicates paths within a stat batch and observes deletion in the next batch', async () => {
+        await backend.mkdir('/same');
+        const port = (backend as unknown as { fsOps: { statMany: (paths: string[]) => Promise<unknown[]> } }).fsOps;
+        const original = port.statMany.bind(port), batches: string[][] = [];
+        port.statMany = paths => { batches.push(paths); return original(paths); };
+        expect(await Promise.all([backend.statType('/same'), backend.statType('/same')]))
+            .toEqual([{ type: 'directory' }, { type: 'directory' }]);
+        expect(batches.map(paths => paths.length)).toEqual([1]);
+        await backend.delete('/same');
+        expect(await backend.statType('/same')).toBeNull();
+        expect(batches.map(paths => paths.length)).toEqual([1, 1]);
+    });
+
+    it.each([0, 3])('rejects all waiters when the host returns %s rows for two paths', async count => {
+        const port = (backend as unknown as { fsOps: { statMany: (paths: string[]) => Promise<unknown[]> } }).fsOps;
+        port.statMany = async () => Array(count).fill(null);
+        const replies = await Promise.allSettled([backend.statType('/a'), backend.statType('/b')]);
+        for (const reply of replies) expect(reply).toMatchObject({ status: 'rejected',
+            reason: expect.objectContaining({ message: 'Invalid batched stat response length' }) });
+    });
+
+    it('survives concurrent writes to the same path without sharing a temp file', async () => {
+        await Promise.all(Array.from({ length: 24 }, (_, index) => backend.write('/same.bin', new Uint8Array([index]))));
+        expect((await backend.read('/same.bin')).length).toBe(1);
+        const names = (await backend.list('/')).map(node => node.name);
+        expect(names.filter(name => name.startsWith('same.bin'))).toEqual(['same.bin']);
+    });
+});

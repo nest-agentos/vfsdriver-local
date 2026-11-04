@@ -1,0 +1,27 @@
+/**
+ * @file vfsdriver-local/src/index.ts
+ * Public API — browser-safe exports only. v4.1.
+ */
+
+// ── Backend ──
+export { LocalFSBackend, openLocalFSBackend } from './localfs-backend';
+export type { LocalFSBackendOptions, LocalStorageAccess, VerifyResult } from './localfs-backend';
+
+// ── Interfaces ──
+export type { ISidecarDb, MetaExtRow } from './db/sidecar-interface';
+export { SIDECAR_OPERATIONS, countSidecarOperations, type SidecarOperation } from './db/sidecar-stats';
+export type { IFsOps, StatResult, DirEntry } from './fs/fs-ops';
+
+// ── Schema ──
+export { DDL, SCHEMA_VERSION } from './db/schema';
+
+// ── Utils ──
+export {
+    ensureDir, unlinkSafe, cleanOrphanedStaging,
+    joinPath, basenamePath, dirnamePath,
+} from './utils/fs-utils';
+
+export { PATH_DATA_EXISTS, movePathStatements } from './db/path-data';
+
+export { RECORD_PAGE_SQL, recordPageValues, decodeRecordPage } from './db/record-page';
+export type { RecordPageRow, SidecarRecordPage } from './db/record-page';

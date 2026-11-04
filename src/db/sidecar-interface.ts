@@ -1,0 +1,59 @@
+/**
+ * @file vfsdriver-local/src/db/sidecar-interface.ts
+ * v4.1: Simplified ISidecarDb for path-based backend. No ino allocation or path_ino CRUD.
+ */
+
+export interface MetaExtRow {
+    path:           string;
+    icon:           string | null;
+    device_handler: string | null;
+    is_asset_dir:   number;   // 0 | 1
+    tags:           string | null;
+    metadata:       string | null;
+    extra:          string | null;
+}
+
+export interface ISidecarDb {
+    /** Report the configured commit durability to hosts requiring recovery journals. */
+    readonly durability?: 'full' | 'normal';
+    // ── meta_ext ──
+    getMetaExt(path: string): Promise<MetaExtRow | null>;
+    getMetaExtMany?(paths: string[]): Promise<MetaExtRow[]>;
+    upsertMetaExt(row: MetaExtRow): Promise<void>;
+    deleteMetaExt(path: string): Promise<void>;
+
+    /** Move metadata, tag indexes and records for an entire subtree, inside a transaction. */
+    movePathData?(fromPath: string, toPath: string): Promise<void>;
+    /** Refuse to merge an existing destination's durable data. */
+    assertPathDataVacant?(path: string): Promise<void>;
+
+    // ── tags ──
+    syncTags(path: string, tags: string[] | undefined): Promise<void>;
+    getAllDistinctTags(): Promise<string[]>;
+    queryByTag(tag: string): Promise<string[]>;
+    listTagEntries?(): Promise<Array<{ path: string; tag: string }>>;
+
+    // ── SeqFile records ──
+    getRecordField(path: string, field: string): Promise<unknown | undefined>;
+    getRecordFields?(path: string, fields: string[]): Promise<Record<string, unknown>>;
+    /** 一次读取多条 (path, field)；结果顺序与入参一致，缺失为 undefined。 */
+    getRecordFieldsMany?(requests: ReadonlyArray<{ path: string; field: string }>): Promise<Array<unknown | undefined>>;
+    setRecordField(path: string, field: string, value: unknown): Promise<void>;
+    deleteRecordField(path: string, field: string): Promise<void>;
+    listRecordFields(path: string, prefix?: string): Promise<Array<{ field: string; value: unknown }>>;
+    /** SQL-bounded page with the exact prefix total, on the current connection. */
+    listRecordFieldsPage?(path: string, prefix: string, offset: number, limit: number): Promise<import('./record-page').SidecarRecordPage>;
+    clearRecordFields(path: string): Promise<void>;
+
+    /** Supply a connection-bound handle for every operation in the transaction. */
+    transaction?<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T>;
+
+    begin(): Promise<void>;
+    commit(): Promise<void>;
+    rollback(): Promise<void>;
+
+    /** Run PRAGMA integrity_check etc. Returns { ok, error }. */
+    healthCheck(): Promise<{ ok: boolean; error?: string }>;
+
+    close(): Promise<void>;
+}

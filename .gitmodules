@@ -1,0 +1,4 @@
+[submodule "vendor/vfs-core"]
+	path = vendor/vfs-core
+	url = https://github.com/nest-agentos/vfs-core.git
+	branch = compat/vendor-aaf3744f
