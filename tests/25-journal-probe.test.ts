@@ -93,7 +93,7 @@ describe('rename journal probing', () => {
     it('lists lightweight entries and reads physical config without sidecar metadata or record probes', async () => {
         for (let index = 0; index < 65; index++) await backend.write(`/light/f${index}`, new TextEncoder().encode('data'));
         await symlink(join(root, 'files/light/f0'), join(root, 'files/light/link'));
-        const { createVFS, createFileSystemView, MemoryBackend } = await import('@itookit/vfs-core');
+        const { createVFS, createFileSystemView, MemoryBackend } = await import('@nestos/vfs-core');
         const { manager } = await createVFS({ rootBackend: new MemoryBackend(), additionalMounts: [{ path: '/ws', backend }] });
         const inner = await manager.openFileSystem('/ws');
         const view = createFileSystemView({ viewId: 'light', mounts: [{ mountId: 'inner', at: '/', fs: inner, access: 'ro' }] });
@@ -110,7 +110,7 @@ describe('rename journal probing', () => {
     });
 
     it('reads requested SeqFile keys in one recovered record transaction', async () => {
-        const { createVFS } = await import('@itookit/vfs-core');
+        const { createVFS } = await import('@nestos/vfs-core');
         const { manager } = await createVFS({ rootBackend: backend });
         try {
             const fs = await manager.openFileSystem('/');
@@ -161,7 +161,7 @@ describe('rename journal probing', () => {
     it('checks path prefixes without fetching sidecar metadata', async () => {
         for (const dir of ['/deep', '/deep/a', '/deep/b']) await backend.mkdir(dir);
         await backend.write('/deep/a/b/file.md', new Uint8Array());
-        const { createVFS, MemoryBackend } = await import('@itookit/vfs-core');
+        const { createVFS, MemoryBackend } = await import('@nestos/vfs-core');
         const { manager } = await createVFS({ rootBackend: new MemoryBackend(),
             additionalMounts: [{ path: '/ws', backend }] });
         try {
@@ -176,7 +176,7 @@ describe('rename journal probing', () => {
     it('keeps a nested view prefix walk metadata-free', async () => {
         for (const dir of ['/nv', '/nv/a', '/nv/b']) await backend.mkdir(dir);
         await backend.write('/nv/a/b/file.md', new Uint8Array());
-        const { createVFS, createFileSystemView, MemoryBackend } = await import('@itookit/vfs-core');
+        const { createVFS, createFileSystemView, MemoryBackend } = await import('@nestos/vfs-core');
         const { manager } = await createVFS({ rootBackend: new MemoryBackend(),
             additionalMounts: [{ path: '/ws', backend }] });
         try {
@@ -198,7 +198,7 @@ describe('rename journal probing', () => {
         const batched: string[][] = [];
         const original = fsOps.statMany.bind(fsOps);
         fsOps.statMany = async paths => { batched.push(paths); return original(paths); };
-        const { createVFS, MemoryBackend } = await import('@itookit/vfs-core');
+        const { createVFS, MemoryBackend } = await import('@nestos/vfs-core');
         const { manager } = await createVFS({ rootBackend: new MemoryBackend(),
             additionalMounts: [{ path: '/ws', backend }] });
         try {
@@ -232,7 +232,7 @@ describe('rename journal probing', () => {
         const outside = join(root, 'outside');
         await mkdir(outside); await writeFile(join(outside, 'secret.txt'), 'must-not-read');
         await symlink(outside, join(root, 'files', 'escape'), 'dir');
-        const { createVFS, createFileSystemView, MemoryBackend } = await import('@itookit/vfs-core');
+        const { createVFS, createFileSystemView, MemoryBackend } = await import('@nestos/vfs-core');
         const { manager } = await createVFS({ rootBackend: new MemoryBackend(), additionalMounts: [{ path: '/ws', backend }] });
         try {
             const inner = await manager.openFileSystem('/ws');

@@ -1,4 +1,4 @@
-# @itookit/vfsdriver-local
+# @nestos/vfsdriver-local
 
 Node.js 本地文件系统存储后端 — 实现 path-based `IStorageBackend`。
 
@@ -36,7 +36,7 @@ src/
 
 ```ts
 // 创建/打开
-import { openLocalFSBackend } from '@itookit/vfsdriver-local';
+import { openLocalFSBackend } from '@nestos/vfsdriver-local';
 const backend = await openLocalFSBackend({ rootDir: '/path/to/vfs', sidecarDir: '/path/to/vfs/.meta' });
 
 // 健康检查
@@ -73,7 +73,7 @@ backend.resetSidecarStats();
 ## 测试
 
 ```bash
-pnpm --filter @itookit/vfsdriver-local test   # vitest run
+pnpm --filter @nestos/vfsdriver-local test   # vitest run
 ```
 
 目录列表按最多 64 个条目分批使用 `IFsOps.statMany`，没有批量端口时有界并发 stat；完整节点的 sidecar 元数据同批调用 `getMetaExtMany`，轻量 `fields: 'entry'` 不读元数据。Tauri Session 的 ScopedFsOps 也必须实现 statMany（按 grant 分组，经 directory_stat_many 检查每条路径），不能仅在全局 TauriFsOps 上实现。性能回归见 `25-journal-probe.test.ts` 的宽目录列表测试。

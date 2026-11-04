@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createVFS, MemoryBackend } from '@itookit/vfs-core';
+import { createVFS, MemoryBackend } from '@nestos/vfs-core';
 import { LocalFSBackend } from '../src/localfs-backend';
 import { NodeFsOps } from '../src/fs/node-fs-ops';
 import { BetterSqliteSidecarDb } from '../src/db/sidecar';

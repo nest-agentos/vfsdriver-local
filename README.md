@@ -1,10 +1,10 @@
-# @itookit/vfsdriver-local
+# @nestos/vfsdriver-local
 
-Local filesystem backend for `@itookit/vfs-core`. File content remains on disk;
+Local filesystem backend for `@nestos/vfs-core`. File content remains on disk;
 SQLite sidecars hold metadata, tags and SeqFile records. Includes atomic file
 replacement and recoverable namespace renames.
 
-Runtime dependencies are `@itookit/vfs-core` and `better-sqlite3`.
+Runtime dependencies are `@nestos/vfs-core` and `better-sqlite3`.
 Project organization, synchronization policy and execution belong to the host.
 
 ## Development
@@ -30,8 +30,8 @@ as an npm dependency and exclude the development submodule.
 ## Usage
 
 ```ts
-import { createVFS } from '@itookit/vfs-core';
-import { LocalFSBackend } from '@itookit/vfsdriver-local';
+import { createVFS } from '@nestos/vfs-core';
+import { LocalFSBackend } from '@nestos/vfsdriver-local';
 
 const backend = new LocalFSBackend({
   rootDir: '/path/to/project',
@@ -43,7 +43,7 @@ await fs.driver.createFile({ parentPath: '/', name: 'hello.txt', content: 'Hello
 await manager.dispose();
 ```
 
-`@itookit/vfsdriver-local/node` exports `NodeFsOps` and `BetterSqliteSidecarDb`
+`@nestos/vfsdriver-local/node` exports `NodeFsOps` and `BetterSqliteSidecarDb`
 for Node hosts that inject these implementations. The root entry retains its
 browser-safe interface for desktop hosts with their own filesystem bridge.
 

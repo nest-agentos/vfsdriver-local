@@ -8,7 +8,7 @@ importers:
 
   .:
     dependencies:
-      '@itookit/vfs-core':
+      '@nestos/vfs-core':
         specifier: 5.3.3
         version: 5.3.3
       better-sqlite3:
@@ -364,7 +364,7 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@itookit/vfs-core@5.3.3':
+  '@nestos/vfs-core@5.3.3':
     resolution: {integrity: sha512-1eB2exCev+f5Q1AsLAxxPQufcPkyCZSq1Io9wzwq5GkyIIr1484zMiHvRrFQ3eENhyN48Xw0mRyf8uepojvDZg==}
 
   '@jridgewell/gen-mapping@0.3.13':
@@ -1092,7 +1092,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
-  '@itookit/vfs-core@5.3.3':
+  '@nestos/vfs-core@5.3.3':
     dependencies:
       ignore: 5.3.2
       yaml: 2.9.1

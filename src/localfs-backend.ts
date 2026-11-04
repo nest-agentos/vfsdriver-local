@@ -20,8 +20,8 @@ import type {
     RecordQueryOptions,
     RecordQueryResult,
     RecordWalkOptions,
-} from '@itookit/vfs-core';
-import { FSError } from '@itookit/vfs-core';
+} from '@nestos/vfs-core';
+import { FSError } from '@nestos/vfs-core';
 import type { ISidecarDb, MetaExtRow } from './db/sidecar-interface';
 import { SIDECAR_OPERATIONS, countSidecarOperations, type SidecarOperation } from './db/sidecar-stats';
 import type { IFsOps, StatResult } from './fs/fs-ops';
