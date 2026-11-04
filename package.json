@@ -1,6 +1,6 @@
 {
   "name": "@nestos/vfsdriver-local",
-  "version": "5.3.1",
+  "version": "0.5.1",
   "description": "Transparent local-filesystem VFS backend — reads and writes go directly to real files on disk.",
   "type": "module",
   "main": "./src/index.ts",
@@ -69,7 +69,7 @@
   "author": "lizlok@gmail.com",
   "license": "MIT",
   "dependencies": {
-    "@nestos/vfs-core": "5.3.3",
+    "@nestos/vfs-core": "^0.5.1",
     "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
