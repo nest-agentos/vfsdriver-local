@@ -35,7 +35,7 @@ import { LocalFSBackend } from '@nestos/vfsdriver-local';
 
 const backend = new LocalFSBackend({
   rootDir: '/path/to/project',
-  sidecarDir: '/path/to/project/.mindos/vfs',
+  sidecarDir: '/path/to/project/.nestos/vfs',
 });
 const { manager } = await createVFS({ rootBackend: backend });
 const fs = await manager.openFileSystem('/');
