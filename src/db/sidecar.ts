@@ -10,8 +10,18 @@ import Database from 'better-sqlite3';
 import type { ISidecarDb, MetaExtRow } from './sidecar-interface';
 import { DDL, SCHEMA_VERSION } from './schema';
 import { PATH_DATA_EXISTS, movePathStatements } from './path-data';
+import {structuredRowControl,structuredRowError,clearStructuredRecords} from './structured-rows';
+import {ordinaryRecordField} from '@nestos/vfs-core/seq/driver';
+import {recordKeysQuery} from './record-keys';
 
 export class BetterSqliteSidecarDb implements ISidecarDb {
+    async getRecordKeys(path: string, options: import('@nestos/vfs-core/protocol').RecordKeysOptions): Promise<string[]> {
+        const query = recordKeysQuery(path,options);
+        return (this.prepare(query.sql).all(...query.values) as Array<{field:string}>).map(row => row.field);
+    }
+    async rowControl(path: string, command: import('@nestos/vfs-core/seq').SeqRowCommand, input?: unknown): Promise<unknown> {
+        return structuredRowControl(this.db,path,command,input);
+    }
     readonly durability: 'full' | 'normal';
     private readonly db: Database.Database;
     // SQL here is a fixed set of parameterized templates. Retain prepared statements
@@ -156,9 +166,10 @@ export class BetterSqliteSidecarDb implements ISidecarDb {
     }
 
     setRecordField(path: string, field: string, value: unknown): Promise<void> {
-        this.prepare(`INSERT INTO records(path, field, value) VALUES (?, ?, ?)
+        ordinaryRecordField(field);
+        try {this.prepare(`INSERT INTO records(path, field, value) VALUES (?, ?, ?)
             ON CONFLICT(path, field) DO UPDATE SET value = excluded.value`)
-            .run(path, field, JSON.stringify(value));
+            .run(path, field, JSON.stringify(value));} catch (error) {throw structuredRowError(error);}
         return Promise.resolve();
     }
 
@@ -180,9 +191,10 @@ export class BetterSqliteSidecarDb implements ISidecarDb {
     }
 
     clearRecordFields(path: string): Promise<void> {
-        this.prepare('DELETE FROM records WHERE path = ?').run(path);
+        clearStructuredRecords(this.db,path);
         return Promise.resolve();
     }
+    async clearRecordSubtree(path: string): Promise<void> {clearStructuredRecords(this.db,path,true);}
 
     async readTransaction<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T> {
         this.db.exec('BEGIN');

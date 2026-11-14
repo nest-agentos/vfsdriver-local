@@ -7,6 +7,8 @@ replacement and recoverable namespace renames.
 Runtime dependencies are `@nestos/vfs-core` and `better-sqlite3`.
 Project organization, synchronization policy and execution belong to the host.
 
+Structured SeqFile controls use typed projection tables and compound indexes while preserving the authoritative entry string. Both better-sqlite3 and the host Node SQLite adapter share the SQL implementation. Schema installation, backfill, ordinary writes and receipts participate in the same transaction; SQLite triggers keep projections synchronized for legacy write paths. `rowControl` is optional on custom sidecars and unsupported implementations do not scan JSON as a fallback. Read queries project only requested columns and use keyset pages without an implicit count. Files declaring the same layout share a physical table; durable renames preserve it and deletion clears record data and unused layouts.
+
 ## Development
 
 ```sh

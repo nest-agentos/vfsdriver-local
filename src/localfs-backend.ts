@@ -259,7 +259,7 @@ export class LocalFSBackend implements IStorageBackend {
     async delete(path: string, options?: { recursive?: boolean }): Promise<void> {
         const realPath = this.resolve(path);
         const stat = await this.fsOps.stat(realPath);
-        if (!stat) { await this.withDb(db => db.deleteMetaExt(path)); return; }
+        if (!stat) { await this.deletePathData(path); return; }
 
         if (stat.isDirectory && options?.recursive) {
             await this._deleteDirRecursive(realPath);
@@ -270,7 +270,10 @@ export class LocalFSBackend implements IStorageBackend {
         }
 
         // Clean up sidecar metadata
-        await this.withDb(db => db.deleteMetaExt(path));
+        await this.deletePathData(path);
+    }
+    private deletePathData(path: string): Promise<void> {
+        return this.withDb(async db => {await db.clearRecordSubtree?.(path); await db.deleteMetaExt(path);});
     }
 
     private async _deleteDirRecursive(realPath: string): Promise<void> {
@@ -556,6 +559,24 @@ const RENAME_JOURNAL = '/__vfs_namespace_journal__';
 const SIDECAR_RECORD_BATCH = 200;
 
 class SidecarRecordStore implements IRecordStore {
+    readonly pathsInTransaction = true;
+    get keyPages(): boolean {return typeof this.db().getRecordKeys === 'function';}
+    getRecordKeys(path: string, options: import('@nestos/vfs-core/protocol').RecordKeysOptions): Promise<string[]> {
+        const read = async (db: ISidecarDb) => {
+            if (!db.getRecordKeys) throw new FSError('ECAPABILITY','Record key pages are unavailable');
+            return db.getRecordKeys(path,options);
+        };
+        return this.scoped ? read(this.db()) : this.withDbRead(read);
+    }
+    get structuredRows(): boolean {return typeof this.db().rowControl === 'function';}
+    rowControl(path: string, command: import('@nestos/vfs-core/seq').SeqRowCommand, input?: unknown): Promise<unknown> {
+        const run = async (db: ISidecarDb) => {
+            if (!db.rowControl) throw new FSError('ECAPABILITY','Structured SeqFile rows are unavailable','seq.rows');
+            return db.rowControl(path,command,input);
+        };
+        if (this.scoped) return run(this.db());
+        return command === 'seq.rows.define.v1' ? this.withDb(run) : this.withDbRead(run);
+    }
     private tail: Promise<void> = Promise.resolve();
 
     constructor(private readonly db: () => ISidecarDb,
@@ -615,8 +636,8 @@ class SidecarRecordStore implements IRecordStore {
         query: RecordQuery,
         options?: RecordQueryOptions,
     ): Promise<RecordQueryResult[]> {
-        const rows = await this.rows(path, query.field);
-        const matched = rows.filter(row => row.field === query.field && recordMatches(row.value as RecordValue, query));
+        const value = await this.getRecordField(path,query.field);
+        const matched = value !== undefined && recordMatches(value,query) ? [{field:query.field,value}] : [];
         const offset = options?.offset ?? 0;
         return matched.slice(offset, offset + (options?.limit ?? matched.length)) as RecordQueryResult[];
     }

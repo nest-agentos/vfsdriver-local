@@ -14,6 +14,7 @@ export interface MetaExtRow {
 }
 
 export interface ISidecarDb {
+    rowControl?(path: string, command: import('@nestos/vfs-core/seq').SeqRowCommand, input?: unknown): Promise<unknown>;
     /** Report the configured commit durability to hosts requiring recovery journals. */
     readonly durability?: 'full' | 'normal';
     // ── meta_ext ──
@@ -35,6 +36,7 @@ export interface ISidecarDb {
 
     // ── SeqFile records ──
     getRecordField(path: string, field: string): Promise<unknown | undefined>;
+    getRecordKeys?(path: string, options: import('@nestos/vfs-core/protocol').RecordKeysOptions): Promise<string[]>;
     getRecordFields?(path: string, fields: string[]): Promise<Record<string, unknown>>;
     /** 一次读取多条 (path, field)；结果顺序与入参一致，缺失为 undefined。 */
     getRecordFieldsMany?(requests: ReadonlyArray<{ path: string; field: string }>): Promise<Array<unknown | undefined>>;
@@ -44,6 +46,7 @@ export interface ISidecarDb {
     /** SQL-bounded page with the exact prefix total, on the current connection. */
     listRecordFieldsPage?(path: string, prefix: string, offset: number, limit: number, after?: string): Promise<import('./record-page').SidecarRecordPage>;
     clearRecordFields(path: string): Promise<void>;
+    clearRecordSubtree?(path: string): Promise<void>;
 
     /** Supply a connection-bound handle for every operation in the transaction. */
     transaction?<T>(operation: (db: ISidecarDb) => Promise<T>): Promise<T>;

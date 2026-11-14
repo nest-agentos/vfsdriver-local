@@ -14,6 +14,7 @@ export const SIDECAR_OPERATIONS = [
     'movePathData', 'assertPathDataVacant',
     'syncTags', 'getAllDistinctTags', 'queryByTag', 'listTagEntries',
     'getRecordField', 'getRecordFields', 'getRecordFieldsMany', 'setRecordField', 'deleteRecordField', 'listRecordFields', 'listRecordFieldsPage', 'clearRecordFields',
+    'rowControl', 'clearRecordSubtree', 'getRecordKeys',
     'transaction', 'readTransaction', 'begin', 'commit', 'rollback', 'healthCheck', 'close',
 ] as const;
 

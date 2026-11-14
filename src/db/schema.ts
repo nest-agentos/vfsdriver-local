@@ -43,4 +43,10 @@ CREATE TABLE IF NOT EXISTS records (
     PRIMARY KEY (path, field)
 );
 CREATE INDEX IF NOT EXISTS idx_records_path ON records(path, field);
+
+-- Optional layouts are shared by files declaring the same structured projection.
+CREATE TABLE IF NOT EXISTS vfs_row_layouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    layout TEXT NOT NULL UNIQUE
+);
 `;

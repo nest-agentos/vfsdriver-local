@@ -121,10 +121,11 @@ describe('rename journal probing', () => {
             await fs.meta.seq!.setEntries('/keys.seq', { a: '1', b: '2', unused: '3' });
             backend.resetSidecarStats();
             expect(await fs.meta.seq!.getEntries('/keys.seq', ['a', 'b', 'a', 'missing'])).toEqual({ a: '1', b: '2' });
-            // One node lookup plus one record snapshot, regardless of the key count.
+            // Resolve the node inside the recovered record snapshot without loading metadata.
             expect(backend.sidecarStats.transaction).toBe(0);
-            expect(backend.sidecarStats.readTransaction).toBe(2);
-            expect(backend.sidecarStats.getRecordFields).toBe(5);
+            expect(backend.sidecarStats.readTransaction).toBe(1);
+            expect(backend.sidecarStats.getRecordFields).toBe(3);
+            expect(backend.sidecarStats.getMetaExt).toBe(0);
             expect(backend.sidecarStats.getRecordField).toBe(0);
             expect(backend.sidecarStats.setRecordField).toBe(0);
         } finally { await manager.dispose(); }

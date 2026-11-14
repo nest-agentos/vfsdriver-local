@@ -25,3 +25,6 @@ export { PATH_DATA_EXISTS, movePathStatements } from './db/path-data';
 
 export { RECORD_FIELD_RANGE,recordPrefixBounds,RECORD_PAGE_SQL, recordPageValues, decodeRecordPage } from './db/record-page';
 export type { RecordPageRow, SidecarRecordPage } from './db/record-page';
+export {structuredRowControl,structuredRowError,clearStructuredRecords} from './db/structured-rows';
+export type {RowDatabase} from './db/row-sql';
+export {recordKeysQuery} from './db/record-keys';
