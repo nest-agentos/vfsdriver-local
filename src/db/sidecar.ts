@@ -1,4 +1,4 @@
-import { RECORD_PAGE_SQL, recordPageValues, decodeRecordPage, type RecordPageRow } from './record-page';
+import { RECORD_FIELD_RANGE,recordPrefixBounds,RECORD_PAGE_SQL, recordPageValues, decodeRecordPage, type RecordPageRow } from './record-page';
 /**
  * @file vfsdriver-local/src/db/sidecar.ts
  *
@@ -169,8 +169,8 @@ export class BetterSqliteSidecarDb implements ISidecarDb {
 
     listRecordFields(path: string, prefix = ''): Promise<Array<{ field: string; value: unknown }>> {
         const rows = this.prepare(`SELECT field, value FROM records
-            WHERE path = ? AND field LIKE ? ESCAPE '\\' ORDER BY field`)
-            .all(path, `${escapeLike(prefix)}%`) as Array<{ field: string; value: string }>;
+            WHERE path = ? AND ${RECORD_FIELD_RANGE} ORDER BY field`)
+            .all(path,...recordPrefixBounds(prefix)) as Array<{ field: string; value: string }>;
         return Promise.resolve(rows.map(row => ({ field: row.field, value: JSON.parse(row.value) })));
     }
 
@@ -223,8 +223,4 @@ export class BetterSqliteSidecarDb implements ISidecarDb {
         this.statements.clear();
         return Promise.resolve();
     }
-}
-
-function escapeLike(value: string): string {
-    return value.replace(/[\\%_]/g, match => `\\${match}`);
 }
