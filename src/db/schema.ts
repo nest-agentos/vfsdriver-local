@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS records (
     value TEXT NOT NULL,
     PRIMARY KEY (path, field)
 );
-CREATE INDEX IF NOT EXISTS idx_records_path ON records(path, field);
+-- The composite primary key already covers ordered path and field lookups.
+DROP INDEX IF EXISTS idx_records_path;
 
 -- Optional layouts are shared by files declaring the same structured projection.
 CREATE TABLE IF NOT EXISTS vfs_row_layouts (
